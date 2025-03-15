@@ -1,0 +1,10 @@
+rules:
+  - name: Detect_Set_IAM_on_Compute_Images
+    description:
+      The compute.images.setIamPolicy permission was detected. 
+      This permission can be used to give an attacker-controlled GCP account read permissions on a compute instance, 
+      which may allow exfiltration of the compute image.
+    conditions:
+      - compute.images.setIamPolicy
+    lab: Coming Soon
+    source: https://stratus-red-team.cloud/attack-techniques/GCP/gcp.exfiltration.share-compute-image/

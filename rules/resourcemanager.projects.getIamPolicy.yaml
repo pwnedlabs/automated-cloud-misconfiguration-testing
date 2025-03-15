@@ -1,0 +1,7 @@
+rules:
+  - name: resourcemanager.projects.getIamPolicy
+    description: resourcemanager.projects.getIamPolicy permission was detected, you can use this permission to view the iam policy of entire gcp project.
+    conditions:
+      - resourcemanager.projects.getIamPolicy
+    lab:
+    source:

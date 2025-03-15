@@ -1,0 +1,9 @@
+rules:
+  - name: Detect_Create_Permissions
+    description:
+      A permission with 'create' was detected. 
+      This indicates that the user can create resources, such as cloud functions, storage buckets, or other resources.
+    conditions:
+      - create
+    lab: 
+    source: 

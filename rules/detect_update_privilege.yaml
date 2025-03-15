@@ -1,0 +1,9 @@
+rules:
+  - name: update
+    description:
+      A permission with 'update' was detected. 
+      This indicates that the user can update the resources, such as cloud functions, app engine, or other resources.
+    conditions:
+      - update
+    lab: 
+    source: https://rhinosecuritylabs.com/gcp/privilege-escalation-google-cloud-platform-part-1/

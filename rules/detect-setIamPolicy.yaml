@@ -1,0 +1,8 @@
+rules:
+  - name: Abuse_IAM_Permission
+    description: setIamPolicy was detected i.e an attacker with this permission can modify the iam permission on a service/object and make himself and owner of it. 
+    conditions:
+      - setIamPolicy
+    lab:
+    source:
+    

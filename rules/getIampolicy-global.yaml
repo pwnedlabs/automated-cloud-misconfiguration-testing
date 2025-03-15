@@ -1,0 +1,7 @@
+rules:
+  - name: getIamPolicy
+    description: getIamPolicy permission was detected, you can leverage this permission to view the iam policy of the related service or entire gcp project. 
+    conditions:
+      - getIamPolicy
+    lab:
+    source:

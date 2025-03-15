@@ -1,0 +1,8 @@
+rules:
+  - name: compute.instances.setMetadata
+    description:
+      The compute.instances.setMetadata permission was detected. An attacker can abuse this permission to add a new ssh keys for any user on the local machine, which can also result in escalating privileges to root user.
+    conditions:
+      - compute.instances.setMetadata
+    lab: Coming Soon
+    source: https://about.gitlab.com/blog/2020/02/12/plundering-gcp-escalating-privileges-in-google-cloud-platform/#add-ssh-key-to-existing-privileged-user
