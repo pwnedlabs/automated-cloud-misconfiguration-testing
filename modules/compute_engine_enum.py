@@ -68,7 +68,14 @@ def check_compute_instance(access_token, project_id):
         
         if compute_response.status_code == 200:
             parsed_instances = parse_compute_engine_instances(compute_response.json())
-            print(Fore.CYAN + f"Compute Instance:")
+            
+            # Save to JSON file
+            with open('compute_instances.json', 'w') as json_file:
+                json.dump(parsed_instances, json_file, indent=4)
+
+            print(Fore.CYAN + f"Compute Instance data saved successfully to 'compute_instances.json'")
+
+            # Display instances in tabular form
             if parsed_instances:
                 table_data = []
                 for instance in parsed_instances:
@@ -99,6 +106,7 @@ def check_compute_instance(access_token, project_id):
                 print("\n" + tabulate(table_data, headers=headers, tablefmt="fancy_grid"))
             else:
                 print(Fore.RED + "No Compute Engine instances found." + Style.RESET_ALL)
+                
         else:
             print(Fore.RED + f"Compute Engine API Error: {compute_response.status_code} - {compute_response.text}" + Style.RESET_ALL)
     else:

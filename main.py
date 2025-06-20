@@ -1,24 +1,24 @@
-import argparse
 import os
 import json
 import requests
 import threading
 import signal
+import argparse
 from modules.rule_based_detection import load_permissions, process_rules_directory
 from modules.compute_engine_enum import *
-from modules.cloud_run import *
+from modules.cloudrun import *
 from modules.app_engine_enum import *
 from modules.gcp_bucket_enum import *
 from modules.cloud_function_enum import *
 from modules.pull_users_and_iam import *
 from modules.pull_iam_policy_all_resource import *
 
+from tqdm import tqdm
+from jinja2 import Environment, FileSystemLoader
+import datetime
+# ------------------------- Argument Parser Setup -------------------------
 
-
-# Initialize the parser
 parser = argparse.ArgumentParser(description="This script tests IAM permissions on GCP using brute force techniques.")
-
-# Add optional arguments
 parser.add_argument('--csp', type=str, help='Are You Using GCP? AWS OR AZURE?', default='gcp')
 parser.add_argument('--bruteforce_gcp_iam', type=str, help="BruteForce GCP IAM Permissions.", default='no')
 parser.add_argument('--enumerate-gcp', type=str, help="Automatically enumerate all IAM permissions in GCP.", default='yes')
@@ -29,146 +29,113 @@ parser.add_argument('--roles-directory', type=str, help="Directory containing ro
 parser.add_argument('--gcp_permission_analyze', action='store_true', help="Analyze GCP permissions using Predefined rules.")
 parser.add_argument('--check-gcp-services', action='store_true', help="Check different GCP services for accessible resources.")
 parser.add_argument('--auto-enum', action='store_true', help="Performs iam bruteforcing and automatically identifies exploitables permissions and services.")
-parser.add_argument("--test",action="store_true",help="test")
+parser.add_argument("--test", action="store_true", help="test")
 parser.add_argument("--region")
-parser.add_argument("--security-reviewer",action='store_true',help="Tries to identify misconfifuration in different gcp services/accounts. ")
-# Parse the arguments
+parser.add_argument("--security-reviewer", action='store_true', help="Tries to identify misconfiguration in different gcp services/accounts.")
+parser.add_argument('--generate-report', type=str, help="Generate HTML Report for GCP.", default='yes')
+
 args = parser.parse_args()
 
-# Global set to hold unique permissions
+# ------------------------- Globals -------------------------
+
 unique_permissions = set()
 stop_threads = False
+thread_lock = threading.Lock()
 
-# Function to save permissions in real-time
+# ------------------------- Signal Handler -------------------------
+
 def save_permissions_to_file():
     with open("valid-gcp-perms.json", "w") as outfile:
-        json.dump(list(unique_permissions), outfile, indent=4)
+        json.dump(sorted(unique_permissions), outfile, indent=4)
 
-# Function to handle Ctrl+C and save before exiting
 def signal_handler(sig, frame):
     global stop_threads
-    print("\nKeyboardInterrupt detected. Saving permissions and stopping...")
+    print("\n[!] KeyboardInterrupt detected. Saving permissions and stopping...")
     stop_threads = True
-    save_permissions_to_file()  # Save gathered permissions before exiting
+    save_permissions_to_file()
     exit(0)
 
-# Register signal handler for Ctrl+C
 signal.signal(signal.SIGINT, signal_handler)
 
-# Function to process the GCP IAM brute force testing
-def gcpiambruteforce_testIAM_Endpoint(access_token, project_id, service_account_email, roles_directory):
-    def process_file(filename):
-        global stop_threads
-        if stop_threads:  # Check if we should stop
-            return
+# ------------------------- Core Functionality -------------------------
 
-        file_path = os.path.join(roles_directory, filename)
+def process_role_file(access_token, project_id, file_path):
+    global stop_threads
+    if stop_threads or not os.path.getsize(file_path):
+        return
 
-        # Check if the file is not empty
-        if os.path.getsize(file_path) == 0:
-            return
+    try:
+        with open(file_path, "r") as file:
+            permissions_data = json.load(file)
+    except json.JSONDecodeError as e:
+        print(f"[!] Error decoding JSON in {file_path}: {e}")
+        return
 
-        # Load permissions from the JSON file
-        try:
-            with open(file_path, "r") as file:
-                permissions_data = json.load(file)
-        except json.JSONDecodeError as e:
-            print(f"Error decoding JSON in {filename}: {e}")
-            return
+    permissions = permissions_data.get("includedPermissions", [])
+    if not permissions:
+        print(f"[-] Ignoring {file_path}: Empty permissions")
+        return
 
-        # Extract included permissions from the JSON file
-        PERMISSIONS = permissions_data.get("includedPermissions", [])
+    payload = { "permissions": permissions }
+    url = f"https://cloudresourcemanager.googleapis.com/v1/projects/{project_id}:testIamPermissions"
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Content-Type": "application/json",
+    }
 
-        # If permissions are empty, ignore the role
-        if not PERMISSIONS:
-            print(f"Ignoring: {filename} - Empty permissions")
-            return
-
-        # Prepare the request payload
-        payload = {
-            "permissions": PERMISSIONS,
-        }
-
-        # Set the API endpoint URL
-        url = f"https://cloudresourcemanager.googleapis.com/v1/projects/{project_id}:testIamPermissions"
-
-        # Set the headers
-        headers = {
-            "Authorization": f"Bearer {access_token}",
-            "Content-Type": "application/json",
-        }
-
-        # Make the API request to test the permissions
+    try:
         response = requests.post(url, headers=headers, json=payload)
-
-        # Check for errors in the response
         if response.status_code != 200:
-            print(f"Error in API call for {filename}: {response.status_code} - {response.text}")
+            #print(f"[!] API call failed for {file_path}: {response.status_code} - {response.text}")
             return
 
-        # Get the valid permissions from the response
-        valid_permissions = response.json().get("permissions", [])
+        valid = response.json().get("permissions", [])
+        if valid:
+            #print(f"[+] Valid Permissions from {os.path.basename(file_path)}: {valid}")
+            with thread_lock:
+                unique_permissions.update(valid)
+                save_permissions_to_file()
+    except Exception as e:
+        print(f"[!] Request error for {file_path}: {e}")
 
-        # Add valid permissions to the set (to ensure uniqueness)
-        if valid_permissions:
-            print(f"Valid Permissions for {filename}: {valid_permissions}")
-            unique_permissions.update(valid_permissions)  # Add to the set
-            save_permissions_to_file()  
+def gcpiambruteforce_testIAM_Endpoint(access_token, project_id, service_account_email, roles_directory):
+    files = [
+        os.path.join(roles_directory, f)
+        for f in os.listdir(roles_directory)
+        if os.path.isfile(os.path.join(roles_directory, f))
+    ]
 
-    # List all role files in the roles directory
-    role_files = [f for f in os.listdir(roles_directory) if os.path.isfile(os.path.join(roles_directory, f))]
-
-    # Use threading to process each file concurrently
     threads = []
-    for role_file in role_files:
-        if stop_threads:
-            break
+    max_threads = 15
 
-        if len(threads) >= 10:  # Limit the maximum number of threads to 10
-            for thread in threads:
-                thread.join()  # Wait for threads to complete before starting new ones
-            threads = []  # Reset the thread list
+    with tqdm(total=len(files), desc="Brute Forcing Permissions", unit="file") as pbar:
+        for file_path in files:
+            if stop_threads:
+                break
 
-        thread = threading.Thread(target=process_file, args=(role_file,))
-        threads.append(thread)
-        thread.start()
+            while len(threads) >= max_threads:
+                threads = [t for t in threads if t.is_alive()]
 
-    # Wait for all threads to complete
-    for thread in threads:
-        thread.join()
+            def run_and_update(*args):
+                process_role_file(*args)
+                pbar.update(1)
 
-# Check if brute force is enabled and validate required arguments
-if args.bruteforce_gcp_iam == "yes":
-    if not args.access_token or not args.service_account_email or not args.project_id:
-        print("Error: --access-token, --service-account-email, and --project-id are required when using brute force.")
-        exit(1)
+            t = threading.Thread(target=run_and_update, args=(access_token, project_id, file_path))
+            t.start()
+            threads.append(t)
 
-    gcpiambruteforce_testIAM_Endpoint(
-        access_token=args.access_token,
-        project_id=args.project_id,
-        service_account_email=args.service_account_email,
-        roles_directory=args.roles_directory
-    )
-
-# GCP Permission Analysis
-if args.gcp_permission_analyze:
-    print("Analyzing GCP permissions using predefined rules.")
-    permissions = load_permissions("valid-gcp-perms.json")
-    process_rules_directory(permissions, "rules/")
+        for t in threads:
+            t.join()
 
 
-# Other CSP options
-elif args.csp == "gcp":
-    print("Using GCP.....")
-elif args.csp == "aws":
-    print("AWS support COMING SOON.")
-elif args.csp == "azure":
-    print("Azure support COMING SOON.")
-else:
-    print("Cloud not supported.")
+
+
+
+
+# ------------------------- Utility Functions -------------------------
 
 def gcp_perms_anal():
-    print("Analyzing GCP permissions using predefined rules.")
+    print("[*] Analyzing GCP permissions using predefined rules.")
     permissions = load_permissions("valid-gcp-perms.json")
     process_rules_directory(permissions, "rules/")
 
@@ -176,123 +143,54 @@ def load_gcp_valid_perms():
     with open('valid-gcp-perms.json') as f:
         return json.load(f)
 
-def parse_compute_engine_instances(response_json):
-    """Extracts instance name, zone, and service account from API response."""
-    instances = []
+# ------------------------- Execution -------------------------
 
-    for zone, details in response_json.get("items", {}).items():
-        if "instances" in details:
-            for instance in details["instances"]:
-                instance_name = instance.get("name")
-                instance_zone = instance.get("zone", "").split("/")[-1]  # Extract only zone name
-                service_accounts = [sa["email"] for sa in instance.get("serviceAccounts", [])] if "serviceAccounts" in instance else ["No service account"]
-
-                instances.append({
-                    "name": instance_name,
-                    "zone": instance_zone,
-                    "service_accounts": service_accounts
-                })
-    
-    return instances
-
-def parse_storage_buckets(response_json):
-    """Extracts bucket name and location from Cloud Storage API response."""
-    buckets = []
-
-    if "items" in response_json:
-        for bucket in response_json["items"]:
-            bucket_name = bucket.get("name")
-            bucket_location = bucket.get("location", "Unknown location")
-
-            buckets.append({
-                "name": bucket_name,
-                "location": bucket_location
-            })
-    
-    return buckets
-
-def check_gcp_services(access_token, project_id):
-    headers = {"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"}
-    
-    # Compute Engine - List VMs
-    compute_engine_perm="compute.instances.list"
-    valid_perms = load_gcp_valid_perms()  # Load permissions
-    if compute_engine_perm in valid_perms:
-        compute_url = f"https://compute.googleapis.com/compute/v1/projects/{project_id}/aggregated/instances"
-        compute_response = requests.get(compute_url, headers=headers)
-        
-        if compute_response.status_code == 200:
-            parsed_instances = parse_compute_engine_instances(compute_response.json())
-
-            if parsed_instances:
-                print("\nCompute Engine Instances:")
-                for instance in parsed_instances:
-                    print(f"Instance Name: {instance['name']}")
-                    print(f"Zone: {instance['zone']}")
-                    print(f"Service Account: {', '.join(instance['service_accounts'])}")
-                    print("-" * 40)
-            else:
-                print("No Compute Engine instances found.")
-        else:
-            print(f"Compute Engine API Error: {compute_response.status_code} - {compute_response.text}")
-    else:
-        print("Missing permission: compute.instances.list")
-
-    # ✅ Cloud Storage - List Buckets
-    storage_perm = "storage.buckets.list"
-    if storage_perm in valid_perms:
-        storage_url = f"https://storage.googleapis.com/storage/v1/b?project={project_id}"
-        storage_response = requests.get(storage_url, headers=headers)
-        
-        if storage_response.status_code == 200:
-            parsed_buckets = parse_storage_buckets(storage_response.json())
-
-            if parsed_buckets:
-                print("\n🔹 Cloud Storage Buckets:")
-                for bucket in parsed_buckets:
-                    print(f"   - Name: {bucket['name']}")
-                    print(f"   - Location: {bucket['location']}")
-                    print("-" * 40)
-            else:
-                print("No Cloud Storage buckets found.")
-        else:
-            print(f"❌ Cloud Storage API Error: {storage_response.status_code} - {storage_response.text}")
-    else:
-        print("🚨 Missing permission: storage.buckets.list")
-
-
-
-    # Cloud Functions - List Functions
-    functions_url = f"https://cloudfunctions.googleapis.com/v1/projects/{project_id}/locations/-/functions"
-    functions_response = requests.get(functions_url, headers=headers)
-    if functions_response.status_code == 200:
-        print("Cloud Functions:", functions_response.json())
-    else:
-        print(f"Cloud Functions API Error: {functions_response.status_code} - {functions_response.text}")
-
-if args.check_gcp_services:
-    if not args.access_token or not args.project_id:
-        print("Error: --access-token and --project-id are required when checking GCP services.")
+if args.bruteforce_gcp_iam == "yes":
+    if not all([args.access_token, args.service_account_email, args.project_id]):
+        print("[!] Missing required arguments for bruteforce.")
         exit(1)
-    check_gcp_services(args.access_token, args.project_id)
+    gcpiambruteforce_testIAM_Endpoint(args.access_token, args.project_id, args.service_account_email, args.roles_directory)
+
+if args.gcp_permission_analyze:
+    gcp_perms_anal()
 
 if args.auto_enum:
     if not args.access_token or not args.project_id:
-        print("Error: --access-token and --project-id are required when checking GCP services.")
+        print("[!] Missing access token or project ID for auto enum.")
         exit(1)
-    #gcpiambruteforce_testIAM_Endpoint(args.access_token, args.project_id,args.service_account_email, args.roles_directory)
+    gcpiambruteforce_testIAM_Endpoint(args.access_token, args.project_id, args.service_account_email, args.roles_directory)
     gcp_perms_anal()
     check_compute_instance(args.access_token, args.project_id)
-    #check_cloud_run_services(args.access_token, args.project_id)
-    check_app_engine_services(args.access_token,args.project_id)
-    list_gcs_buckets(args.access_token,args.project_id)
+    check_app_engine_services(args.access_token, args.project_id)
+    list_gcs_buckets(args.access_token, args.project_id)
+    fetch_cloud_run_services(args.access_token, args.project_id,args.region)
+    #generate_cloud_run_report()
 
-
+if args.generate_report:
+    from report.cloudstorage import *
+    from report.cloudrunreport import *
+    from report.computeengine import *
+    from report.iam import *
+    generate_cloud_run_report()
+    generate_compute_report(datetime)
+    generate_cloud_storage_report()
+    generate_iam_report()
 
 if args.test:
-    list_gcs_buckets(args.access_token,args.project_id)
-    check_compute_instance(args.access_token, args.project_id)
-    get_all_iam_policies(args.access_token,args.project_id)
-    gcp_perms_anal()
+    #list_gcs_buckets(args.access_token, args.project_id)
+    #check_compute_instance(args.access_token, args.project_id)
+    #get_all_iam_policies(args.access_token, args.project_id)
+    #gcp_perms_anal()
+    fetch_cloud_run_services(args.access_token, args.project_id,args.region)
+if args.csp == "gcp":
+    print("[*] GCP selected.")
+elif args.csp == "aws":
+    print("[*] AWS support coming soon.")
+elif args.csp == "azure":
+    print("[*] Azure support coming soon.")
+else:
+    print("[!] Cloud not supported.")
 
-print(args)
+#report_data="report_data.json"
+#generate_html_report(report_data)
+#print(args)

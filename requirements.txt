@@ -1,0 +1,4 @@
+requests
+tabulate
+colorama
+pyyaml

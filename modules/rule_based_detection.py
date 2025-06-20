@@ -30,7 +30,9 @@ def match_permissions(permissions, yaml_rule):
     return matches, description, lab, source
 
 def process_rules_directory(permissions, rules_directory):
-    """Processes all YAML files in the rules directory."""
+    """Processes all YAML files in the rules directory and saves the matched permissions."""
+    all_matches = []  # Store all matches in this list
+    
     for file_name in os.listdir(rules_directory):
         if file_name.endswith('.yaml'):
             yaml_file_path = os.path.join(rules_directory, file_name)
@@ -46,8 +48,23 @@ def process_rules_directory(permissions, rules_directory):
                 for match in matches:
                     print(f"\033[1;32mPermission: {match}\033[0m")  # Green bold
                 print("\n")
+
+                # Save matches in a dictionary
+                all_matches.append({
+                    'rule': file_name,
+                    'description': description,
+                    'lab': lab,
+                    'source': source,
+                    'permissions': matches
+                })
             else:
                 print(f"\033[1;33mNo matches found in rule '{file_name}'.\033[0m\n")  # Yellow bold
+
+    # Save all matches to a JSON file
+    if all_matches:
+        with open('matches.json', 'w') as json_file:
+            json.dump(all_matches, json_file, indent=4)
+        print("\033[1;32mMatches saved to 'matches.json'.\033[0m")
 
 def main():
     # Path to the JSON file

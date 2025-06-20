@@ -26,11 +26,11 @@ def fetch_bucket_iam_policies(bucket_name, headers):
                 public_access_roles.append(binding["role"])
 
         if public_access_roles:
-            return Fore.RED + f"Public access detected: {', '.join(public_access_roles)}" + Style.RESET_ALL
+            return f"Public access detected: {', '.join(public_access_roles)}"
         else:
-            return Fore.GREEN + "No public access detected" + Style.RESET_ALL
+            return "No public access detected"
     else:
-        return Fore.YELLOW + "Unable to retrieve IAM policy" + Style.RESET_ALL
+        return "Unable to retrieve IAM policy"
 
 def list_gcs_buckets(access_token, project_id):
     headers = {"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"}
@@ -45,6 +45,12 @@ def list_gcs_buckets(access_token, project_id):
         if response.status_code == 200:
             buckets = response.json().get("items", [])
             table_data = []
+            bucket_list = []
+
+            if buckets:
+                print("Buckets found:", len(buckets))
+            else:
+                print("No buckets found in the response.")
 
             for bucket in buckets:
                 bucket_name = bucket.get("name", "Unknown")
@@ -53,14 +59,36 @@ def list_gcs_buckets(access_token, project_id):
                 created_time = bucket.get("timeCreated", "Unknown")
                 iam_status = fetch_bucket_iam_policies(bucket_name, headers)
 
+                bucket_info = {
+                    "bucket_name": bucket_name,
+                    "location": location,
+                    "storage_class": storage_class,
+                    "created_time": created_time,
+                    "iam_status": iam_status
+                }
+
+                # Append bucket info to the list
+                bucket_list.append(bucket_info)
+
+                # Prepare table data for pretty printing
                 table_data.append([
                     Fore.CYAN + bucket_name + Style.RESET_ALL,
                     Fore.BLUE + location + Style.RESET_ALL,
                     Fore.GREEN + storage_class + Style.RESET_ALL,
                     Fore.YELLOW + created_time + Style.RESET_ALL,
-                    iam_status
+                    Fore.RED + iam_status + Style.RESET_ALL if "Public" in iam_status else Fore.GREEN + iam_status + Style.RESET_ALL
                 ])
 
+            # Write bucket list to JSON file if it's not empty
+            if bucket_list:
+                print(bucket_list)
+                with open("bucket-output.json", "w") as outfile:
+                    json.dump(bucket_list, outfile, indent=4)
+                print("✅ Bucket data saved to bucket-output.json")
+            else:
+                print("⚠ No bucket data to save.")
+            
+            # Print tabular view of buckets
             headers = [
                 Fore.WHITE + "Bucket Name" + Style.RESET_ALL,
                 Fore.WHITE + "Location" + Style.RESET_ALL,
@@ -68,7 +96,6 @@ def list_gcs_buckets(access_token, project_id):
                 Fore.WHITE + "Created Time" + Style.RESET_ALL,
                 Fore.WHITE + "IAM Status" + Style.RESET_ALL
             ]
-
             print("\n" + tabulate(table_data, headers=headers, tablefmt="fancy_grid"))
 
         else:
@@ -76,3 +103,5 @@ def list_gcs_buckets(access_token, project_id):
     else:
         print(Fore.RED + "Missing permission: storage.buckets.list" + Style.RESET_ALL)
 
+# Example usage (replace with your actual values):
+# list_gcs_buckets("your-access-token", "your-project-id")
