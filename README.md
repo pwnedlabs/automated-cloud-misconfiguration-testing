@@ -75,6 +75,10 @@ python3 main.py \
   --region <REGION>
 ```
 
+https://github.com/user-attachments/assets/5cedf6a8-8fce-4806-8956-cf8e176b99fa
+
+
+
 ---
 
 ### 🛠 Supported Flags
